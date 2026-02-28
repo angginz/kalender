@@ -117,6 +117,10 @@ Tidak ada environment variables yang diperlukan untuk development.
 
 ## 📱 Screenshots
 
+![Kalender Tampilan Utama](./Kalender%20Screenshot%201.png)
+![Kalender dengan Hari Libur](./Kalender%20Screenshot%202.png)
+![Jadwal Sholat](./Kalender%20Screenshot%203.png)
+
 ### Halaman Kalender
 - Tampilan kalender bulanan dengan hari libur
 - Navigasi antar bulan yang smooth
