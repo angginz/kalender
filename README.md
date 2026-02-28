@@ -116,10 +116,12 @@ Tidak ada environment variables yang diperlukan untuk development.
 - **Jadwal Sholat API**: `https://equran.id/api/v2`
 
 ## 📱 Screenshots
+![Kalender dengan Hari Libur]
+<img width="2813" height="1600" alt="Kalender Screenshot 1" src="https://github.com/user-attachments/assets/1493ff53-5f0c-4bf2-9133-d831fa3650b1" />
 
-![Kalender Tampilan Utama](./Kalender%20Screenshot%201.png)
-![Kalender dengan Hari Libur](./Kalender%20Screenshot%202.png)
-![Jadwal Sholat](./Kalender%20Screenshot%203.png)
+![Jadwal Sholat]
+<img width="2813" height="1600" alt="Kalender Screenshot 2" src="https://github.com/user-attachments/assets/ae6e45e4-be4b-4129-b765-27b9cfde7c32" />
+<img width="2813" height="1600" alt="Kalender Screenshot 3" src="https://github.com/user-attachments/assets/3a6449fa-19c3-4e7c-bb1c-5b0e97310f7f" />
 
 ### Halaman Kalender
 - Tampilan kalender bulanan dengan hari libur
