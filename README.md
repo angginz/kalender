@@ -3,8 +3,7 @@
 Aplikasi web modern untuk menampilkan kalender Indonesia dengan hari libur nasional dan jadwal sholat lengkap untuk seluruh kota di Indonesia.
 
 ## Demo
-
-![Demo](https://kalender-rho.vercel.app)
+[https://kalender-rho.vercel.app]
 
 ## ✨ Fitur
 
