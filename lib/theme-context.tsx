@@ -34,24 +34,10 @@ function getInitialTheme(): Theme {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>('light');
   const [mounted, setMounted] = useState(false);
-  const [hasManualPreference, setHasManualPreference] = useState(false);
 
   // Initialize theme immediately on mount
   useEffect(() => {
-    const savedTheme = localStorage.getItem('theme') as Theme;
-    const manualFlag = localStorage.getItem('theme_manual');
-    const hasSavedTheme = savedTheme === 'light' || savedTheme === 'dark';
-    const isManual = manualFlag === '1' && hasSavedTheme;
-
-    // Migration: jika ada localStorage theme lama tapi belum pernah set manual,
-    // anggap itu bukan preferensi manual dan ikuti sistem.
-    if (!isManual && hasSavedTheme) {
-      localStorage.removeItem('theme');
-    }
-
-    setHasManualPreference(isManual);
-
-    const initialTheme = isManual ? savedTheme : getInitialTheme();
+    const initialTheme = getInitialTheme();
     setTheme(initialTheme);
     
     // Apply theme class immediately to prevent flash
@@ -71,32 +57,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.classList.remove('light', 'dark');
     root.classList.add(theme);
     root.style.colorScheme = theme;
-    if (hasManualPreference) {
-      localStorage.setItem('theme', theme);
-    }
-  }, [theme, mounted, hasManualPreference]);
-
-  // Listen to system theme changes
-  useEffect(() => {
-    if (!mounted) return;
-    
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    const handleChange = (e: MediaQueryListEvent) => {
-      // Only auto-switch if user hasn't manually set a preference
-      if (!hasManualPreference) {
-        const newTheme = e.matches ? 'dark' : 'light';
-        setTheme(newTheme);
-      }
-    };
-    
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, [mounted, hasManualPreference]);
+    localStorage.setItem('theme', theme);
+  }, [theme, mounted]);
 
   const toggleTheme = useCallback(() => {
-    setHasManualPreference(true);
-    localStorage.setItem('theme_manual', '1');
     setTheme(prevTheme => {
       const next = prevTheme === 'light' ? 'dark' : 'light';
 

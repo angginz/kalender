@@ -2,9 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useTheme } from '@/lib/theme-context';
+import PwaInstallButton from '@/components/PwaInstallButton';
 
 export default function TopNav() {
   const pathname = usePathname();
+  const { theme, toggleTheme } = useTheme();
 
   const isCalendar = pathname === '/';
   const isSholat = pathname.startsWith('/sholat');
@@ -17,8 +20,8 @@ export default function TopNav() {
         className={`
           flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-semibold transition-all
           ${isCalendar
-            ? 'bg-gradient-to-r from-emerald-500 to-teal-400 text-white border-emerald-300 shadow-md shadow-emerald-500/30'
-            : 'bg-transparent text-emerald-300 border-emerald-500/60 hover:bg-emerald-500/10'}
+            ? 'bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-500/30'
+            : 'bg-white dark:bg-gray-800 text-emerald-600 dark:text-emerald-400 border-emerald-300 dark:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'}
         `}
       >
         <span className="text-lg">📅</span>
@@ -36,8 +39,8 @@ export default function TopNav() {
         className={`
           flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-semibold transition-all
           ${isSholat
-            ? 'bg-gradient-to-r from-fuchsia-500 to-violet-500 text-white border-fuchsia-300 shadow-md shadow-fuchsia-500/30'
-            : 'bg-transparent text-fuchsia-300 border-fuchsia-500/60 hover:bg-fuchsia-500/10'}
+            ? 'bg-purple-600 text-white border-purple-600 shadow-md shadow-purple-600/30'
+            : 'bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20'}
         `}
       >
         <span className="text-lg">🕒</span>
@@ -48,6 +51,17 @@ export default function TopNav() {
           </span>
         )}
       </Link>
+
+      {/* Theme Toggle */}
+      <button
+        onClick={toggleTheme}
+        className="flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-semibold transition-all bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+      >
+        <span className="text-lg">{theme === 'light' ? '🌙' : '☀️'}</span>
+        <span>{theme === 'light' ? 'Dark' : 'Light'}</span>
+      </button>
+
+      <PwaInstallButton />
     </div>
   );
 }

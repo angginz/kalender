@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import TopNav from '@/components/TopNav';
 import dayjs from 'dayjs';
-import { locationService } from '@/lib/location-service';
+import { locationService, type DetectedRegion, type LocationData } from '@/lib/location-service';
+import { useTheme } from '@/lib/theme-context';
 
 interface PrayerTime {
   name: string;
@@ -13,98 +13,232 @@ interface PrayerTime {
   isPassed: boolean;
 }
 
+interface DailyPrayerSchedule {
+  tanggal: number;
+  tanggal_lengkap: string;
+  hari: string;
+  imsak: string;
+  subuh: string;
+  terbit: string;
+  dhuha: string;
+  dzuhur: string;
+  ashar: string;
+  maghrib: string;
+  isya: string;
+}
+
+interface ToastState {
+  id: number;
+  message: string;
+  type: 'success' | 'info' | 'error';
+}
+
+interface LocationCacheData {
+  savedAt: number;
+  locationData: LocationData;
+  detectedRegion: DetectedRegion;
+}
+
+const LOCATION_CACHE_KEY = 'sholat_location_cache_v1';
+const LOCATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+const months = [
+  { value: 1, label: 'Januari' },
+  { value: 2, label: 'Februari' },
+  { value: 3, label: 'Maret' },
+  { value: 4, label: 'April' },
+  { value: 5, label: 'Mei' },
+  { value: 6, label: 'Juni' },
+  { value: 7, label: 'Juli' },
+  { value: 8, label: 'Agustus' },
+  { value: 9, label: 'September' },
+  { value: 10, label: 'Oktober' },
+  { value: 11, label: 'November' },
+  { value: 12, label: 'Desember' },
+];
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^kota\s+/, '')
+    .replace(/^kabupaten\s+/, '')
+    .replace(/^kab\.\s+/, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectAreaType(value: string): 'kota' | 'kabupaten' | 'unknown' {
+  const lower = value.toLowerCase().trim();
+  if (lower.startsWith('kota ')) return 'kota';
+  if (lower.startsWith('kabupaten ') || lower.startsWith('kab. ')) return 'kabupaten';
+  return 'unknown';
+}
+
+function findBestCityMatch(cities: string[], target: string): string | null {
+  const normalizedTarget = normalizeText(target);
+  const targetType = detectAreaType(target);
+  const sameTypeCities =
+    targetType === 'unknown' ? cities : cities.filter((city) => detectAreaType(city) === targetType);
+  const candidatePool = sameTypeCities.length > 0 ? sameTypeCities : cities;
+
+  const exact = candidatePool.find((city) => normalizeText(city) === normalizedTarget);
+  if (exact) return exact;
+
+  const partial = candidatePool.find((city) => {
+    const normalizedCity = normalizeText(city);
+    return normalizedCity.includes(normalizedTarget) || normalizedTarget.includes(normalizedCity);
+  });
+
+  return partial ?? candidatePool[0] ?? null;
+}
+
 export default function SholatPage() {
-  const [selectedProvince, setSelectedProvince] = useState<string>(''); // Kosongkan dulu
-  const [selectedCity, setSelectedCity] = useState<string>(''); // Kosongkan dulu
+  const { theme } = useTheme();
+  const [selectedProvince, setSelectedProvince] = useState('');
+  const [selectedCity, setSelectedCity] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  const [provinceQuery, setProvinceQuery] = useState('');
+  const [cityQuery, setCityQuery] = useState('');
+  const [isProvinceDropdownOpen, setIsProvinceDropdownOpen] = useState(false);
+  const [isCityDropdownOpen, setIsCityDropdownOpen] = useState(false);
   const [prayerTimes, setPrayerTimes] = useState<PrayerTime[]>([]);
   const [nextPrayer, setNextPrayer] = useState<PrayerTime | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState<string>('');
-  const [currentDate, setCurrentDate] = useState<string>('');
+  const [timeRemaining, setTimeRemaining] = useState('');
+  const [currentDate, setCurrentDate] = useState('');
   const [provinces, setProvinces] = useState<string[]>([]);
   const [cities, setCities] = useState<string[]>([]);
-  const [fullSchedule, setFullSchedule] = useState<any[]>([]);
-  const [isTransitioning, setIsTransitioning] = useState(false); // Flag untuk mencegah race condition
+  const [fullSchedule, setFullSchedule] = useState<DailyPrayerSchedule[]>([]);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [locationData, setLocationData] = useState<LocationData | null>(null);
+  const [detectedRegion, setDetectedRegion] = useState<DetectedRegion | null>(null);
+  const [autoDetectAttempted, setAutoDetectAttempted] = useState(false);
+  const [pendingDetectedCity, setPendingDetectedCity] = useState('');
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
+    'default'
+  );
+  const [isNotificationEnabled, setIsNotificationEnabled] = useState(false);
+  const [toasts, setToasts] = useState<ToastState[]>([]);
+  const notifiedPrayerKeysRef = useRef<Set<string>>(new Set());
+  const toastIdRef = useRef(0);
+  const provinceBoxRef = useRef<HTMLDivElement | null>(null);
+  const cityBoxRef = useRef<HTMLDivElement | null>(null);
 
-  const months = [
-    { value: 1, label: 'Januari' },
-    { value: 2, label: 'Februari' },
-    { value: 3, label: 'Maret' },
-    { value: 4, label: 'April' },
-    { value: 5, label: 'Mei' },
-    { value: 6, label: 'Juni' },
-    { value: 7, label: 'Juli' },
-    { value: 8, label: 'Agustus' },
-    { value: 9, label: 'September' },
-    { value: 10, label: 'Oktober' },
-    { value: 11, label: 'November' },
-    { value: 12, label: 'Desember' },
-  ];
+  const showToast = useCallback((message: string, type: ToastState['type']) => {
+    const id = ++toastIdRef.current;
+    setToasts((prev) => [...prev, { id, message, type }]);
 
-  // Load provinces on mount
-  useEffect(() => {
-    const loadProvinces = async () => {
-      try {
-        const provincesList = await locationService.getProvinces();
-        setProvinces(provincesList);
-      } catch (error) {
-        console.error('Error in loadProvinces useEffect:', error);
-        // Error sudah ditangani di service level, tidak perlu fallback lagi
-      }
-    };
-    loadProvinces();
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 2800);
   }, []);
 
-  // Load cities when province changes
-  useEffect(() => {
-    const loadCities = async () => {
-      if (!selectedProvince) return;
-      try {
-        const citiesList = await locationService.getCities(selectedProvince);
-        setCities(citiesList);
-        
-        // Reset selectedCity saat provinsi berubah
-        setSelectedCity('');
-        setIsTransitioning(false); // Reset flag setelah cities selesai di-load
-      } catch (error) {
-        console.error('Error loading cities:', error);
-        setCities([]);
-        setSelectedCity('');
-        setIsTransitioning(false); // Reset flag meskipun error
-      }
-    };
-    loadCities();
-  }, [selectedProvince]);
+  const filteredProvinces = provinces
+    .filter((province) => province.toLowerCase().includes(provinceQuery.trim().toLowerCase()))
+    .slice(0, 30);
 
-  // Fetch prayer times
-  const fetchPrayerTimes = useCallback(async () => {
-    // Skip fetch jika sedang transitioning (provinsi baru sedang di-load)
-    if (isTransitioning) {
-      return;
-    }
+  const filteredCities = cities
+    .filter((city) => city.toLowerCase().includes(cityQuery.trim().toLowerCase()))
+    .slice(0, 30);
 
-    // Validasi: pastikan province dan city sudah dipilih
-    if (!selectedProvince || !selectedCity) {
-      return; // Skip fetch jika belum ada pilihan
-    }
-
-    // Validasi tambahan: pastikan selectedCity valid untuk selectedProvince (cek di cities array)
-    if (cities.length > 0 && !cities.includes(selectedCity)) {
-      return; // Skip fetch jika city tidak valid untuk provinsi saat ini
+  const readLocationCache = useCallback((): LocationCacheData | null => {
+    if (typeof window === 'undefined') {
+      return null;
     }
 
     try {
-      const data = await locationService.getPrayerTimes(selectedProvince, selectedCity, 2026, selectedMonth);
-      
+      const raw = window.localStorage.getItem(LOCATION_CACHE_KEY);
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as LocationCacheData;
+      if (!parsed?.savedAt || !parsed.locationData || !parsed.detectedRegion) {
+        return null;
+      }
+
+      const isExpired = Date.now() - parsed.savedAt > LOCATION_CACHE_TTL_MS;
+      if (isExpired) {
+        window.localStorage.removeItem(LOCATION_CACHE_KEY);
+        return null;
+      }
+
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const saveLocationCache = useCallback((location: LocationData, region: DetectedRegion) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const payload: LocationCacheData = {
+      savedAt: Date.now(),
+      locationData: location,
+      detectedRegion: region,
+    };
+
+    window.localStorage.setItem(LOCATION_CACHE_KEY, JSON.stringify(payload));
+  }, []);
+
+  const updateNextPrayer = useCallback((prayers: PrayerTime[]) => {
+    const now = new Date();
+    const currentTime = now.getHours() * 60 + now.getMinutes();
+
+    let nextPrayerFound = false;
+
+    const updatedPrayers = prayers.map((prayer) => {
+      const [hours, minutes] = prayer.time.split(':').map(Number);
+      const prayerTime = hours * 60 + minutes;
+
+      const isPassed = currentTime > prayerTime;
+      const isNext = !nextPrayerFound && !isPassed;
+
+      if (isNext) {
+        nextPrayerFound = true;
+        setNextPrayer({ ...prayer, isNext: true, isPassed: false });
+      }
+
+      return { ...prayer, isPassed, isNext };
+    });
+
+    if (!nextPrayerFound && prayers.length > 0) {
+      setNextPrayer({ ...prayers[0], isNext: true, isPassed: false });
+    }
+
+    setPrayerTimes(updatedPrayers);
+  }, []);
+
+  const fetchPrayerTimes = useCallback(async () => {
+    if (isTransitioning || !selectedProvince || !selectedCity) {
+      return;
+    }
+
+    if (cities.length > 0 && !cities.includes(selectedCity)) {
+      return;
+    }
+
+    try {
+      setErrorMessage('');
+      const data = await locationService.getPrayerTimes(
+        selectedProvince,
+        selectedCity,
+        new Date().getFullYear(),
+        selectedMonth
+      );
+
       const today = new Date();
       const isCurrentMonth = selectedMonth === today.getMonth() + 1;
-      
+
       if (isCurrentMonth) {
-        const todaySchedule = data.jadwal.find(j => j.tanggal === today.getDate());
-        
+        const todaySchedule = data.jadwal.find((j) => j.tanggal === today.getDate());
+
         if (todaySchedule) {
           setCurrentDate(`${todaySchedule.hari}, ${todaySchedule.tanggal} ${data.bulan_nama} ${data.tahun}`);
-          
+
           const prayers: PrayerTime[] = [
             { name: 'Subuh', time: todaySchedule.subuh, isNext: false, isPassed: false },
             { name: 'Dzuhur', time: todaySchedule.dzuhur, isNext: false, isPassed: false },
@@ -112,74 +246,253 @@ export default function SholatPage() {
             { name: 'Maghrib', time: todaySchedule.maghrib, isNext: false, isPassed: false },
             { name: 'Isya', time: todaySchedule.isya, isNext: false, isPassed: false },
           ];
-          
+
           setPrayerTimes(prayers);
           updateNextPrayer(prayers);
         }
       }
-      
+
       setFullSchedule(data.jadwal);
     } catch (error) {
-      console.error('Error fetching prayer times:', error);
+      const message = error instanceof Error ? error.message : 'Gagal memuat jadwal sholat';
+      setErrorMessage(message);
     }
-  }, [selectedProvince, selectedCity, selectedMonth, cities, isTransitioning]);
+  }, [selectedProvince, selectedCity, selectedMonth, cities, isTransitioning, updateNextPrayer]);
+
+  const detectLocationAndSelectCity = useCallback(async () => {
+    try {
+      setErrorMessage('');
+
+      const currentLocation = await locationService.getCurrentLocation();
+      setLocationData(currentLocation);
+
+      const region = await locationService.detectRegionByCoordinates(
+        currentLocation.latitude,
+        currentLocation.longitude
+      );
+
+      setDetectedRegion(region);
+      setPendingDetectedCity(region.city);
+      setIsTransitioning(true);
+      setSelectedProvince(region.province);
+      saveLocationCache(currentLocation, region);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal mendeteksi lokasi';
+      setErrorMessage(message);
+    }
+  }, [saveLocationCache]);
+
+  useEffect(() => {
+    const loadProvinces = async () => {
+      try {
+        const provincesList = await locationService.getProvinces();
+        setProvinces(provincesList);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Gagal memuat daftar provinsi';
+        setErrorMessage(message);
+      }
+    };
+
+    loadProvinces();
+  }, []);
+
+  useEffect(() => {
+    if (provinces.length === 0 || autoDetectAttempted) {
+      return;
+    }
+
+    setAutoDetectAttempted(true);
+    const cachedLocation = readLocationCache();
+
+    if (cachedLocation) {
+      setLocationData(cachedLocation.locationData);
+      setDetectedRegion(cachedLocation.detectedRegion);
+      setPendingDetectedCity(cachedLocation.detectedRegion.city);
+      setIsTransitioning(true);
+      setSelectedProvince(cachedLocation.detectedRegion.province);
+      return;
+    }
+
+    detectLocationAndSelectCity();
+  }, [provinces, autoDetectAttempted, detectLocationAndSelectCity, readLocationCache]);
+
+  useEffect(() => {
+    const loadCities = async () => {
+      if (!selectedProvince) {
+        setCities([]);
+        setSelectedCity('');
+        return;
+      }
+
+      try {
+        const citiesList = await locationService.getCities(selectedProvince);
+        setCities(citiesList);
+
+        if (pendingDetectedCity) {
+          const autoCity = findBestCityMatch(citiesList, pendingDetectedCity);
+          setSelectedCity(autoCity ?? '');
+          setPendingDetectedCity('');
+        } else {
+          setSelectedCity((prev) => (citiesList.includes(prev) ? prev : ''));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Gagal memuat daftar kota';
+        setErrorMessage(message);
+        setCities([]);
+        setSelectedCity('');
+      } finally {
+        setIsTransitioning(false);
+      }
+    };
+
+    loadCities();
+  }, [selectedProvince, pendingDetectedCity]);
+
+  useEffect(() => {
+    setProvinceQuery(selectedProvince);
+  }, [selectedProvince]);
+
+  useEffect(() => {
+    setCityQuery(selectedCity);
+  }, [selectedCity]);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (provinceBoxRef.current && !provinceBoxRef.current.contains(target)) {
+        setIsProvinceDropdownOpen(false);
+      }
+      if (cityBoxRef.current && !cityBoxRef.current.contains(target)) {
+        setIsCityDropdownOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
 
   useEffect(() => {
     fetchPrayerTimes();
   }, [fetchPrayerTimes]);
 
-  // Update next prayer
-  const updateNextPrayer = useCallback((prayers: PrayerTime[]) => {
-    const now = new Date();
-    const currentTime = now.getHours() * 60 + now.getMinutes();
-    
-    let nextPrayerFound = false;
-    
-    const updatedPrayers = prayers.map(prayer => {
-      const [hours, minutes] = prayer.time.split(':').map(Number);
-      const prayerTime = hours * 60 + minutes;
-      
-      const isPassed = currentTime > prayerTime;
-      const isNext = !nextPrayerFound && !isPassed;
-      
-      if (isNext) {
-        nextPrayerFound = true;
-        setNextPrayer({ ...prayer, isNext: true, isPassed: false });
-      }
-      
-      return { ...prayer, isPassed, isNext };
-    });
-    
-    if (!nextPrayerFound && prayers.length > 0) {
-      setNextPrayer({ ...prayers[0], isNext: true, isPassed: false });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('unsupported');
+      return;
     }
-    
-    setPrayerTimes(updatedPrayers);
+
+    setNotificationPermission(Notification.permission);
   }, []);
 
-  // Update countdown timer
+  const enableNotifications = useCallback(async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setNotificationPermission('unsupported');
+      showToast('Browser ini tidak mendukung notifikasi.', 'error');
+      return;
+    }
+
+    if (Notification.permission === 'denied') {
+      setNotificationPermission('denied');
+      showToast('Notifikasi diblokir browser. Aktifkan manual di pengaturan situs.', 'error');
+      return;
+    }
+
+    let permission: NotificationPermission = Notification.permission;
+    if (permission !== 'granted') {
+      permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+    }
+
+    if (permission === 'granted') {
+      setIsNotificationEnabled(true);
+      showToast('Notifikasi sholat aktif.', 'success');
+    } else if (permission === 'default') {
+      showToast('Izin notifikasi belum diberikan.', 'info');
+    } else {
+      showToast('Notifikasi diblokir browser.', 'error');
+    }
+  }, [showToast]);
+
+  const disableNotifications = useCallback(() => {
+    setIsNotificationEnabled(false);
+    showToast('Notifikasi sholat nonaktif.', 'info');
+  }, [showToast]);
+
+  const toggleNotifications = useCallback(() => {
+    if (isNotificationEnabled) {
+      disableNotifications();
+      return;
+    }
+
+    void enableNotifications();
+  }, [disableNotifications, enableNotifications, isNotificationEnabled]);
+
+  useEffect(() => {
+    if (!isNotificationEnabled || notificationPermission !== 'granted' || prayerTimes.length === 0) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const currentHm = `${hh}:${mm}`;
+      const dayKey = dayjs(now).format('YYYY-MM-DD');
+
+      notifiedPrayerKeysRef.current = new Set(
+        [...notifiedPrayerKeysRef.current].filter((key) => key.startsWith(dayKey))
+      );
+
+      prayerTimes.forEach((prayer) => {
+        if (prayer.time !== currentHm) {
+          return;
+        }
+
+        const notifyKey = `${dayKey}-${selectedProvince}-${selectedCity}-${prayer.name}-${prayer.time}`;
+        if (notifiedPrayerKeysRef.current.has(notifyKey)) {
+          return;
+        }
+
+        const title = `Waktu ${prayer.name}`;
+        const body = selectedCity && selectedProvince
+          ? `Sudah masuk waktu ${prayer.name} di ${selectedCity}, ${selectedProvince} (${prayer.time})`
+          : `Sudah masuk waktu ${prayer.name} (${prayer.time})`;
+
+        new Notification(title, {
+          body,
+          tag: notifyKey,
+        });
+
+        notifiedPrayerKeysRef.current.add(notifyKey);
+      });
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [isNotificationEnabled, notificationPermission, prayerTimes, selectedCity, selectedProvince]);
+
   useEffect(() => {
     if (!nextPrayer) return;
 
     const updateTimer = () => {
       const now = new Date();
       const [hours, minutes] = nextPrayer.time.split(':').map(Number);
-      
-      let targetTime = new Date();
+
+      const targetTime = new Date();
       targetTime.setHours(hours, minutes, 0, 0);
-      
+
       if (targetTime < now) {
         targetTime.setDate(targetTime.getDate() + 1);
       }
-      
+
       const diff = targetTime.getTime() - now.getTime();
-      
       const hoursRemaining = Math.floor(diff / (1000 * 60 * 60));
       const minutesRemaining = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
       const secondsRemaining = Math.floor((diff % (1000 * 60)) / 1000);
-      
+
       setTimeRemaining(
-        `${hoursRemaining.toString().padStart(2, '0')}:${minutesRemaining.toString().padStart(2, '0')}:${secondsRemaining.toString().padStart(2, '0')}`
+        `${hoursRemaining.toString().padStart(2, '0')}:${minutesRemaining
+          .toString()
+          .padStart(2, '0')}:${secondsRemaining.toString().padStart(2, '0')}`
       );
     };
 
@@ -194,89 +507,201 @@ export default function SholatPage() {
       <div className="max-w-6xl mx-auto space-y-6">
         <TopNav />
 
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Jadwal Sholat Indonesia</h1>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Jadwal Sholat Indonesia</h1>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleNotifications}
+              disabled={notificationPermission === 'unsupported'}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${
+                isNotificationEnabled && notificationPermission === 'granted'
+                  ? 'bg-amber-100 border-amber-300 text-amber-700 dark:bg-amber-900/30 dark:border-amber-500 dark:text-amber-300'
+                  : 'bg-gray-100 border-gray-300 text-gray-500 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-400'
+              } disabled:opacity-50`}
+              title="Toggle notifikasi sholat"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 2a5 5 0 00-5 5v2.6c0 .7-.2 1.3-.6 1.9l-1.1 1.6a1 1 0 00.8 1.5h11.8a1 1 0 00.8-1.5l-1.1-1.6a3.2 3.2 0 01-.6-1.9V7a5 5 0 00-5-5zm-2 13a2 2 0 104 0H8z" />
+              </svg>
+              <span className="text-sm font-medium">Notifikasi</span>
+            </button>
+
+            <button
+              onClick={detectLocationAndSelectCity}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
+            >
+              Deteksi Ulang Lokasi
+            </button>
           </div>
         </div>
 
-        {/* Location Selectors */}
+        {notificationPermission === 'denied' && (
+          <p className="text-sm text-red-600 dark:text-red-400 -mt-4">
+            Izin notifikasi diblokir browser. Aktifkan manual di pengaturan situs.
+          </p>
+        )}
+
+        <div className="fixed top-5 right-5 z-50 space-y-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`min-w-[240px] max-w-[320px] rounded-lg border px-4 py-3 text-sm shadow-lg backdrop-blur ${
+                toast.type === 'success'
+                  ? 'bg-emerald-100/95 border-emerald-300 text-emerald-800'
+                  : toast.type === 'error'
+                  ? 'bg-red-100/95 border-red-300 text-red-800'
+                  : 'bg-sky-100/95 border-sky-300 text-sky-800'
+              }`}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+
+        {notificationPermission === 'unsupported' && (
+          <p className="text-sm text-gray-600 dark:text-gray-300 -mt-4">
+            Browser ini tidak mendukung notifikasi.
+          </p>
+        )}
+
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-300 dark:border-gray-700">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Lokasi Aktif</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                {selectedCity || detectedRegion?.city || 'Belum terdeteksi'}
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                {selectedProvince || detectedRegion?.province || 'Pilih provinsi/kota untuk melanjutkan'}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 text-sm">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-blue-300 bg-blue-600 text-white dark:border-blue-400 dark:bg-blue-600 dark:text-white">
+                <span className="font-medium">Zona Waktu:</span>
+                <span>{detectedRegion?.timezone || 'Asia/Jakarta'}</span>
+              </div>
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-600 bg-slate-700 text-white dark:border-slate-500 dark:bg-slate-700 dark:text-white">
+                <span className="font-medium">Koordinat:</span>
+                <span>
+                  {locationData
+                    ? `${locationData.latitude.toFixed(5)}, ${locationData.longitude.toFixed(5)}`
+                    : 'Belum tersedia'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {errorMessage && <p className="text-red-600 dark:text-red-400 mt-2 text-sm">{errorMessage}</p>}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Instruction message */}
-          {!selectedProvince && (
-            <div className="col-span-3 bg-blue-900/20 border border-blue-700 rounded p-4 text-blue-300">
-              <p className="text-center">📍 Silakan pilih provinsi terlebih dahulu untuk melihat jadwal sholat</p>
-            </div>
-          )}
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-300 dark:border-gray-700">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Pilih Provinsi</label>
+            <div ref={provinceBoxRef} className="relative">
+              <input
+                type="text"
+                value={provinceQuery}
+                onFocus={() => setIsProvinceDropdownOpen(true)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setProvinceQuery(value);
+                  setIsProvinceDropdownOpen(true);
 
-          {selectedProvince && !selectedCity && (
-            <div className="col-span-3 bg-blue-900/20 border border-blue-700 rounded p-4 text-blue-300">
-              <p className="text-center">🏙️ Silakan pilih kota/kabupaten untuk melihat jadwal sholat</p>
+                  if (selectedProvince && value !== selectedProvince) {
+                    setSelectedProvince('');
+                    setSelectedCity('');
+                    setCityQuery('');
+                    setCities([]);
+                    setPendingDetectedCity('');
+                  }
+                }}
+                placeholder="Cari & pilih provinsi..."
+                className="w-full p-3 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-black dark:text-white"
+              />
+
+              {isProvinceDropdownOpen && (
+                <div className="absolute z-20 mt-2 w-full max-h-56 overflow-y-auto rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 shadow-lg">
+                  {filteredProvinces.length > 0 ? (
+                    filteredProvinces.map((province) => (
+                      <button
+                        key={province}
+                        type="button"
+                        onClick={() => {
+                          setIsTransitioning(true);
+                          setProvinceQuery(province);
+                          setSelectedProvince(province);
+                          setSelectedCity('');
+                          setCityQuery('');
+                          setPendingDetectedCity('');
+                          setIsProvinceDropdownOpen(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm text-gray-800 dark:text-gray-100 hover:bg-blue-50 dark:hover:bg-gray-800"
+                      >
+                        {province}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Provinsi tidak ditemukan</p>
+                  )}
+                </div>
+              )}
             </div>
-          )}
-          
-          <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-300 mb-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              Pilih Provinsi
-            </label>
-            <p className="text-xs text-gray-500 mb-2">Pilih provinsi tempat tinggal Anda</p>
-            <select
-              value={selectedProvince}
-              onChange={(e) => {
-                setIsTransitioning(true); // Set flag transitioning
-                setSelectedProvince(e.target.value);
-              }}
-              className="w-full p-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="">-- Pilih Provinsi --</option>
-              {provinces.map((province) => (
-                <option key={province} value={province}>
-                  {province}
-                </option>
-              ))}
-            </select>
           </div>
 
-          <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-300 mb-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              Pilih Kabupaten/Kota
-            </label>
-            <p className="text-xs text-gray-500 mb-2">Pilih kabupaten atau kota</p>
-            <select
-              value={selectedCity}
-              onChange={(e) => setSelectedCity(e.target.value)}
-              className="w-full p-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="">-- Pilih Kota --</option>
-              {cities.map((city) => (
-                <option key={city} value={city}>
-                  {city}
-                </option>
-              ))}
-            </select>
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-300 dark:border-gray-700">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Pilih Kabupaten/Kota</label>
+            <div ref={cityBoxRef} className="relative">
+              <input
+                type="text"
+                value={cityQuery}
+                onFocus={() => selectedProvince && setIsCityDropdownOpen(true)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setCityQuery(value);
+                  if (selectedProvince) {
+                    setIsCityDropdownOpen(true);
+                  }
+                  if (selectedCity && value !== selectedCity) {
+                    setSelectedCity('');
+                  }
+                }}
+                placeholder={selectedProvince ? 'Cari & pilih kota/kabupaten...' : 'Pilih provinsi terlebih dahulu'}
+                disabled={!selectedProvince}
+                className="w-full p-3 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-black dark:text-white disabled:opacity-60"
+              />
+
+              {isCityDropdownOpen && selectedProvince && (
+                <div className="absolute z-20 mt-2 w-full max-h-56 overflow-y-auto rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 shadow-lg">
+                  {filteredCities.length > 0 ? (
+                    filteredCities.map((city) => (
+                      <button
+                        key={city}
+                        type="button"
+                        onClick={() => {
+                          setCityQuery(city);
+                          setSelectedCity(city);
+                          setIsCityDropdownOpen(false);
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm text-gray-800 dark:text-gray-100 hover:bg-blue-50 dark:hover:bg-gray-800"
+                      >
+                        {city}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Kota/kabupaten tidak ditemukan</p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-            <label className="flex items-center gap-2 text-sm font-medium text-gray-300 mb-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              Pilih Bulan
-            </label>
-            <p className="text-xs text-gray-500 mb-2">Pilih bulan yang ingin dilihat</p>
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-300 dark:border-gray-700">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Pilih Bulan</label>
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              className="w-full p-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full p-3 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-black dark:text-white"
             >
               {months.map((month) => (
                 <option key={month.value} value={month.value}>
@@ -287,178 +712,83 @@ export default function SholatPage() {
           </div>
         </div>
 
-        {/* Countdown Card */}
-        {isTransitioning ? (
-          <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl p-6 text-white animate-pulse">
+        {nextPrayer ? (
+          <div className="countdown-card bg-gradient-to-r from-teal-100 via-blue-100 to-purple-100 dark:from-teal-200 dark:via-blue-200 dark:to-purple-200 rounded-2xl p-6 text-slate-900">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-gray-700 rounded-full"></div>
-                <div>
-                  <div className="h-4 bg-gray-700 rounded w-32 mb-2"></div>
-                  <div className="h-8 bg-gray-700 rounded w-24"></div>
-                </div>
+              <div>
+                <p className="countdown-label text-sm text-slate-700">Sholat Berikutnya</p>
+                <p className="countdown-main text-3xl font-bold text-teal-800">{nextPrayer.name}</p>
               </div>
-              
+
               <div className="text-center">
-                <div className="h-10 bg-gray-700 rounded w-32 mb-2"></div>
-                <div className="h-4 bg-gray-700 rounded w-24"></div>
+                <p className="countdown-main text-4xl font-mono font-bold text-teal-800">{timeRemaining}</p>
+                <p className="countdown-label text-sm text-slate-700 mt-1">Menuju {nextPrayer.time}</p>
               </div>
-              
+
               <div className="text-right">
-                <div className="h-4 bg-gray-700 rounded w-20 mb-2"></div>
-                <div className="h-8 bg-gray-700 rounded w-24"></div>
-              </div>
-            </div>
-          </div>
-        ) : nextPrayer ? (
-          <div className="bg-gradient-to-r from-teal-900 via-blue-900 to-purple-900 rounded-2xl p-6 text-white">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center">
-                  <svg className="w-8 h-8 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-300">Sholat Berikutnya</p>
-                  <p className="text-3xl font-bold text-teal-400">{nextPrayer.name}</p>
-                </div>
-              </div>
-              
-              <div className="text-center">
-                <p className="text-4xl font-mono font-bold text-teal-400">{timeRemaining}</p>
-                <p className="text-sm text-gray-400 mt-1">Menuju {nextPrayer.time}</p>
-              </div>
-              
-              <div className="text-right">
-                <p className="text-sm text-gray-400">Sekarang</p>
-                <p className="text-2xl font-mono">{dayjs().format('HH.mm.ss')}</p>
+                <p className="countdown-label text-sm text-slate-700">Sekarang</p>
+                <p className="countdown-time text-2xl font-mono text-slate-900">{dayjs().format('HH.mm.ss')}</p>
               </div>
             </div>
           </div>
         ) : (
-          <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl p-6 text-white animate-pulse">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-gray-700 rounded-full"></div>
-                <div>
-                  <div className="h-4 bg-gray-700 rounded w-32 mb-2"></div>
-                  <div className="h-8 bg-gray-700 rounded w-24"></div>
-                </div>
-              </div>
-              
-              <div className="text-center">
-                <div className="h-10 bg-gray-700 rounded w-32 mb-2"></div>
-                <div className="h-4 bg-gray-700 rounded w-24"></div>
-              </div>
-              
-              <div className="text-right">
-                <div className="h-4 bg-gray-700 rounded w-20 mb-2"></div>
-                <div className="h-8 bg-gray-700 rounded w-24"></div>
-              </div>
-            </div>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300">
+            {isTransitioning ? 'Memuat kota...' : 'Pilih provinsi dan kota untuk menampilkan jadwal sholat'}
           </div>
         )}
 
-        {/* Today's Prayer Schedule */}
-        <div className="bg-gray-900 rounded-2xl p-6 text-white border border-gray-800">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-              <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-            </div>
-            <div className="flex items-center gap-3">
-              <h3 className="text-2xl font-bold">Jadwal Sholat Hari Ini</h3>
-              {currentDate && !isTransitioning && (
-                <span className="px-3 py-1 bg-teal-500/20 text-teal-400 text-sm rounded-full">
-                  {currentDate}
-                </span>
-              )}
-              {isTransitioning && (
-                <div className="h-6 bg-gray-700 rounded w-32 animate-pulse"></div>
-              )}
-            </div>
-          </div>
-          
-          <div className="text-sm text-gray-400 mb-6">
-            {isTransitioning ? (
-              <div className="h-4 bg-gray-700 rounded w-48 animate-pulse"></div>
-            ) : (
-              `${selectedCity}, ${selectedProvince}`
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 text-black dark:text-white border border-gray-300 dark:border-gray-800">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-2xl font-bold">Jadwal Sholat Hari Ini</h3>
+            {currentDate && (
+              <span
+                className={`px-3 py-1 text-sm font-medium rounded-full border ${
+                  theme === 'dark'
+                    ? '!bg-teal-700 !text-white border-teal-300/50'
+                    : 'bg-teal-100 text-teal-800 border-teal-200'
+                }`}
+              >
+                {currentDate}
+              </span>
             )}
           </div>
-          
-          {isTransitioning ? (
-            <div className="grid grid-cols-5 gap-4">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="p-5 rounded-xl border-2 border-gray-700 bg-gray-800 animate-pulse">
-                  <div className="text-center">
-                    <div className="h-4 bg-gray-700 rounded mb-2 w-12 mx-auto"></div>
-                    <div className="h-6 bg-gray-700 rounded w-16 mx-auto"></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : prayerTimes.length > 0 ? (
-            <div className="grid grid-cols-5 gap-4">
+
+          <div className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+            {selectedCity && selectedProvince ? `${selectedCity}, ${selectedProvince}` : '-'}
+          </div>
+
+          {prayerTimes.length > 0 ? (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {prayerTimes.map((prayer) => (
                 <div
                   key={prayer.name}
-                  className={`p-5 rounded-xl border-2 transition-all ${
+                  className={`p-4 rounded-xl border-2 ${
                     prayer.isNext
-                      ? 'bg-orange-900/50 border-orange-500 text-orange-400 shadow-lg shadow-orange-500/20'
+                      ? 'bg-orange-100 dark:bg-orange-900/50 border-orange-400 text-orange-600 dark:text-orange-400'
                       : prayer.isPassed
-                      ? 'bg-gray-800 border-gray-700 text-gray-500'
-                      : 'bg-blue-900/30 border-blue-500/30 text-blue-400'
+                      ? 'bg-gray-200 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-500'
+                      : 'bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-500/30 text-blue-600 dark:text-blue-400'
                   }`}
                 >
-                  <div className="text-center">
-                    {prayer.isNext && (
-                      <div className="flex justify-center mb-2">
-                        <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                        </svg>
-                      </div>
-                    )}
-                    <p className="text-sm mb-2">{prayer.name}</p>
-                    <p className={`text-2xl font-bold ${
-                      prayer.isNext ? 'text-orange-400' : prayer.isPassed ? 'text-gray-500' : 'text-blue-400'
-                    }`}>
-                      {prayer.time}
-                    </p>
-                  </div>
+                  <p className="text-sm mb-2 text-center">{prayer.name}</p>
+                  <p className="text-2xl font-bold text-center">{prayer.time}</p>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-5 gap-4">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="p-5 rounded-xl border-2 border-gray-700 bg-gray-800 animate-pulse">
-                  <div className="text-center">
-                    <div className="h-4 bg-gray-700 rounded mb-2 w-12 mx-auto"></div>
-                    <div className="h-6 bg-gray-700 rounded w-16 mx-auto"></div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <p className="text-gray-500">Data jadwal hari ini belum tersedia.</p>
           )}
         </div>
 
-        {/* Full Month Schedule Table */}
-        <div className="bg-gray-900 rounded-2xl p-6 text-white border border-gray-800">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 text-black dark:text-white border border-gray-300 dark:border-gray-800">
           <h3 className="text-xl font-bold mb-4">
-            {isTransitioning ? (
-              <div className="h-6 bg-gray-700 rounded w-48 animate-pulse"></div>
-            ) : (
-              `Jadwal Lengkap ${months.find(m => m.value === selectedMonth)?.label} 2026`
-            )}
+            Jadwal Lengkap {months.find((m) => m.value === selectedMonth)?.label} {new Date().getFullYear()}
           </h3>
-          
+
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="bg-gray-800">
+                <tr className="bg-gray-200 dark:bg-gray-800">
                   <th className="p-3 text-left text-sm font-semibold">Tanggal</th>
                   <th className="p-3 text-center text-sm font-semibold">Subuh</th>
                   <th className="p-3 text-center text-sm font-semibold">Dzuhur</th>
@@ -468,43 +798,19 @@ export default function SholatPage() {
                 </tr>
               </thead>
               <tbody>
-                {isTransitioning ? (
-                  // Skeleton rows saat transitioning
-                  [...Array(10)].map((_, i) => (
-                    <tr key={i} className="border-b border-gray-800">
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <div className="h-4 bg-gray-700 rounded w-16 animate-pulse"></div>
-                          <div className="h-4 bg-gray-700 rounded w-8 animate-pulse"></div>
-                        </div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto animate-pulse"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto animate-pulse"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto animate-pulse"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto animate-pulse"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto animate-pulse"></div>
-                      </td>
-                    </tr>
-                  ))
-                ) : fullSchedule.length > 0 ? (
+                {fullSchedule.length > 0 ? (
                   fullSchedule.map((day) => (
-                    <tr key={day.tanggal} className="border-b border-gray-800 hover:bg-gray-800/50">
+                    <tr
+                      key={day.tanggal}
+                      className="border-b border-gray-300 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800/50"
+                    >
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{day.hari}</span>
-                          <span className="text-gray-400">{day.tanggal}</span>
+                          <span className="text-gray-500 dark:text-gray-400">{day.tanggal}</span>
                         </div>
                       </td>
-                      <td className="p-3 text-center text-blue-400">{day.subuh}</td>
+                      <td className="p-3 text-center text-blue-600 dark:text-blue-400">{day.subuh}</td>
                       <td className="p-3 text-center">{day.dzuhur}</td>
                       <td className="p-3 text-center">{day.ashar}</td>
                       <td className="p-3 text-center">{day.maghrib}</td>
@@ -512,32 +818,11 @@ export default function SholatPage() {
                     </tr>
                   ))
                 ) : (
-                  // Skeleton rows saat data kosong
-                  [...Array(10)].map((_, i) => (
-                    <tr key={i} className="border-b border-gray-800">
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <div className="h-4 bg-gray-700 rounded w-16"></div>
-                          <div className="h-4 bg-gray-700 rounded w-8"></div>
-                        </div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto"></div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="h-4 bg-gray-700 rounded w-12 mx-auto"></div>
-                      </td>
-                    </tr>
-                  ))
+                  <tr>
+                    <td className="p-3 text-center text-gray-500" colSpan={6}>
+                      Data jadwal belum tersedia.
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>

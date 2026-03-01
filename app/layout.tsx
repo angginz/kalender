@@ -31,6 +31,12 @@ export const metadata: Metadata = {
     locale: "id_ID",
     siteName: "Aplikasi Indonesia",
   },
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({

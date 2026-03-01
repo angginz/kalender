@@ -21,6 +21,11 @@ Aplikasi web modern untuk menampilkan kalender Indonesia dengan hari libur nasio
 - Tabel jadwal lengkap per bulan
 - Update real-time untuk sholat hari ini
 
+### 🖥️ Widget Desktop (PWA)
+- Bisa di-install ke desktop melalui tombol `Install App`
+- Jalan sebagai aplikasi terpisah (mode standalone)
+- Cocok untuk dipakai seperti widget/shortcut desktop
+
 ### 🎨 UI/UX
 - Responsive design untuk mobile dan desktop
 - Smooth loading dengan skeleton components
@@ -109,11 +114,21 @@ kalender/
 ## 🔧 Konfigurasi
 
 ### Environment Variables
-Tidak ada environment variables yang diperlukan untuk development.
+Buat file `.env.local`:
+
+```bash
+cp .env.example .env.local
+```
+
+Isi API key dari [islamicapi.com](https://islamicapi.com/doc/):
+
+```env
+ISLAMIC_API_KEY=your_islamicapi_key_here
+```
 
 ### API Configuration
 - **Hari Libur API**: `https://libur.deno.dev/api`
-- **Jadwal Sholat API**: `https://equran.id/api/v2`
+- **Jadwal Sholat API**: `https://islamicapi.com/api/v1/prayer-time` (via internal route `app/api/prayer-time/route.ts`)
 
 ## 📱 Screenshots
 ![Kalender dengan Hari Libur]
@@ -176,9 +191,9 @@ Contributions are welcome!
 
 ## 📝 TODO
 
-- [ ] Notifikasi sholat
+- [✅] Notifikasi sholat
 - [ ] Peta lokasi otomatis
-- [ ] Widget untuk desktop
+- [✅] Widget untuk desktop (PWA)
 - [ ] Support untuk bahasa lain
 - [ ] Export jadwal ke PDF
 - [ ] Integration dengan calendar apps
