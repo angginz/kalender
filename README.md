@@ -131,10 +131,10 @@ ISLAMIC_API_KEY=your_islamicapi_key_here
 - **Jadwal Sholat API**: `https://islamicapi.com/api/v1/prayer-time` (via internal route `app/api/prayer-time/route.ts`)
 
 ## 📱 Screenshots
-![Kalender dengan Hari Libur]
+### Kalender dengan Hari Libur
 <img width="2813" height="1600" alt="Kalender Screenshot 1" src="https://github.com/user-attachments/assets/1493ff53-5f0c-4bf2-9133-d831fa3650b1" />
 
-![Jadwal Sholat]
+### Jadwal Sholat
 <img width="2813" height="1600" alt="Kalender Screenshot 2" src="https://github.com/user-attachments/assets/ae6e45e4-be4b-4129-b765-27b9cfde7c32" />
 <img width="2813" height="1600" alt="Kalender Screenshot 3" src="https://github.com/user-attachments/assets/3a6449fa-19c3-4e7c-bb1c-5b0e97310f7f" />
 
